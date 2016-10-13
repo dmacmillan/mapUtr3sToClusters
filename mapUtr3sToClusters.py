@@ -7,7 +7,7 @@ import math
 import subprocess as sub
 import scipy.stats as stat
 
-def genScatterPdf(coords_file, tissue, names, window, mul, ss, rs, skew, kurt):
+def genScatterPdf(coords_file, tissue, names, window, extend, mul, ss, rs, skew, kurt):
     if ss:
         ss = 'skipSame'
     if rs:
@@ -17,6 +17,7 @@ def genScatterPdf(coords_file, tissue, names, window, mul, ss, rs, skew, kurt):
     title = 'utr3_lengths_{}_{}_{}'.format(tissue, names[0], names[1])
     params = ['window={}'.format(window)]
     params.append('maxUtr3Length={}'.format(mul))
+    params.append('extend={}'.format(extend))
     if ss:
         params.append(ss)
     if rs:
@@ -195,8 +196,10 @@ if __name__ == '__main__':
     kurt = stat.kurtosis(distances)
 
     genScatterPdf(scatter_file_path, 
-                  args.tissue, names, 
-                  args.window, 
+                  args.tissue,
+                  names,
+                  args.window,
+                  args.extend,
                   args.max_utr3_length, 
                   args.skip_same, 
                   args.remove_symmetric,
