@@ -24,7 +24,7 @@ def genScatterPdf(coords_file, tissue, names, window, extend, mul, ss, rs, skew,
         params.append(rs)
     params = ('_').join(params)
     pdf = title + '_' + params
-    main = title + '\\n' + params
+    main = title
     rscript = 'library(LSD)\n' \
         'library(e1071)\n' \
         'setwd("{}")\n' \
@@ -38,7 +38,7 @@ def genScatterPdf(coords_file, tissue, names, window, extend, mul, ss, rs, skew,
         'dev.off()\n' \
         'dev.off()\n'.format(directory, pdf, pdf, main, names[0], names[1])
     dens_title = 'density_{}_{}_{}'.format(tissue, names[0], names[1])
-    main = dens_title + '\\n' + params
+    main = dens_title
     pdf = dens_title + '_' + params 
     density = 'density = unlist(read.table("distances"))\n' \
         'skew = round(skewness(density),3)\n' \
