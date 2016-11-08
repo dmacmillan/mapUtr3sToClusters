@@ -3,9 +3,19 @@ import os
 import sys
 import pysam
 import gzip
+import copy
 import math
 import subprocess as sub
 import scipy.stats as stat
+import numpy as np
+
+def parseT2G(fpath):
+    results = {}
+    with gzip.open(fpath, 'rb') as f:
+        for line in f:
+            line = line.strip().split('\t')
+            results[line[0]] = line[1]
+    return results
 
 def genScatterPdf(coords_file, tissue, names, window, extend, mul, ss, rs, skew, kurt):
     if ss:
@@ -73,7 +83,7 @@ def getUtr3Length(utr3, site):
 
 def getCoords(list_of_lengths, skip_same=True, window=15):
     coords = []
-    counts = {'+': 0, '-': 0, '0': 0}
+    skipped = 0
     lol = list_of_lengths
     for i in xrange(len(lol)-1):
         for j in xrange(i+1, len(lol)):
@@ -81,15 +91,11 @@ def getCoords(list_of_lengths, skip_same=True, window=15):
                 for l in xrange(len(lol[j])):
                     coord = (lol[i][k], lol[j][l])
                     if abs(coord[0] - coord[1]) <= window:
-                        counts['0'] += 1
                         if skip_same:
+                            skipped += 1
                             continue
-                    elif coord[0] < coord[1]:
-                        counts['+'] += 1
-                    else:
-                        counts['-'] += 1
                     coords.append(coord)
-    return (coords, counts)
+    return (coords, skipped)
 
 def removeSymmetric(coords, window=15):
     indices = set()
@@ -100,7 +106,42 @@ def removeSymmetric(coords, window=15):
             if (abs(x0 - y1) <= window) and (abs(x1 - y0) <= window):
                 indices.add(i)
                 indices.add(j)
-    return [x for i,x in enumerate(coords) if i not in indices]
+    result = [x for i,x in enumerate(coords) if i not in indices]
+    return (result, len(indices))
+
+def getMultiStopGenes(utr3s, t2g):
+    genes = {}
+    for utr3 in utr3s:
+        gene = t2g[utr3.name]
+        if gene not in genes:
+            if utr3.strand == '+':
+                genes[gene] = set((utr3.start,))
+            else:
+                genes[gene] = set((utr3.end,))
+        else:
+            if utr3.strand == '+':
+                genes[gene].add(utr3.start)
+            else:
+                genes[gene].add(utr3.end)
+    return set([x for x in genes if (len(genes[x]) > 1)])
+
+def filterUtr3s(utr3s, t2g):
+    genes = {}
+    for utr3 in utr3s:
+        gene = t2g[utr3.name]
+        if gene not in genes:
+            genes[gene] = [utr3]
+        else:
+            genes[gene].append(utr3)
+    keep = {}
+    for gene in genes:
+        if genes[gene][0].strand == '+':
+            if len(set([x.start for x in genes[gene]])) == 1:
+                keep[gene] = genes[gene]
+        else:
+            if len(set([x.end for x in genes[gene]])) == 1:
+                keep[gene] = genes[gene]
+    return keep
 
 #import matplotlib.pyplot as plt
 #from matplotlib.backends.backend_pdf import PdfPages
@@ -111,6 +152,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Given a KLEAT file return 3\'UTR coordinates for each cleavage site, otherwise return None')
     
     parser.add_argument('clusters', nargs='+', help='Clustered KLEAT bed file for specific dataset')
+    parser.add_argument('-t2g', '--transcripts_to_genes', help='A mapping of transcripts to genes in TSV format')
     parser.add_argument('-t', '--tissue', help='Name of the tissue or group being analyzed')
     parser.add_argument('-n', '--names', nargs='+', help='Assign names to each dataset, with respect to clusters order')
     #parser.add_argument('--xlim', type=float, default=30000, help='The limit of the x-axis to display. Default is 30000')
@@ -128,8 +170,6 @@ if __name__ == '__main__':
     if not os.path.isdir(args.outdir):
         os.makedirs(args.outdir)
     
-    #pp = PdfPages('all_utrs.pdf')
-    
     utr3s = pysam.tabix_iterator(open(args.utr3s), parser=pysam.asBed())
     datasets = [pysam.TabixFile(x, parser=pysam.asBed()) for x in args.clusters]
     if not args.names:
@@ -139,14 +179,22 @@ if __name__ == '__main__':
     # Store the results of running the script
     results = {}
     
+    if args.transcripts_to_genes:
+        t2g = args.transcripts_to_genes
+        t2g = parseT2G(t2g)
+    else:
+        sys.exit('Must specify -t2g')
+
+    utr3s = filterUtr3s(utr3s, t2g)
     
     distances = []
-    all_counts = {'+': 0, '-': 0, '0': 0}
     scatter_file_path = os.path.join(args.outdir, 'coordinates')
     scatter_file = open(scatter_file_path, 'w')
     
-    #utr3s = [x for x in utr3s][5:500]
-    for utr3 in utr3s:
+    total_symmetric = 0
+    total_zero = 0
+    for gene in utr3s:
+        utr3 = max(utr3s[gene], key = lambda x: x.end)
         if utr3.end - utr3.start > args.max_utr3_length:
             continue
         dataset_lengths = []
@@ -171,29 +219,28 @@ if __name__ == '__main__':
                 continue
         except TypeError:
             continue
-        coords, counts = getCoords(dataset_lengths, skip_same=args.skip_same, window=args.window)
+        coords, num_zero = getCoords(dataset_lengths, skip_same=args.skip_same, window=args.window)
+        total_zero += num_zero
         if args.remove_symmetric:
-            before = len(coords)
-            coords = removeSymmetric(coords, window=args.window)
-            counts['+'] -= (before - len(coords))
-            counts['-'] -= (before - len(coords))
-        for key in counts:
-            all_counts[key] += counts[key]
+            coords, num_symmetric = removeSymmetric(coords, window=args.window)
+            total_symmetric += num_symmetric
         for coord in coords:
             scatter_file.write('{}\t{}\n'.format(coord[0], coord[1]))
         distances += [distanceToLine(x) for x in coords]
-    #    plt.plot([x[0] for x in coords], [x[1] for x in coords], color=[1,0,0,0.2], marker='o', linestyle='None')
-    #    plt.plot(range(args.ylim), color=[0,0,1,0.2], linewidth=0.5)
-    #    plt.xlabel(names[0])
-    #    plt.ylabel(names[1])
-    #    plt.axis([0,args.xlim,0,args.ylim])
-    #    plt.yscale('log')
-    #    plt.xscale('log')
     
     scatter_file.close()
     
-    skew = stat.skew(distances)
-    kurt = stat.kurtosis(distances)
+    _max = round(max(distances), 2)
+    _min = round(min(distances), 2)
+    median = round(np.percentile(distances, 50), 2)
+    mode = round(
+        max(set(distances), key = distances.count), 2
+    )
+    stdev = round(np.std(distances), 2)
+    skew = round(stat.skew(distances), 2)
+    kurt = round(stat.kurtosis(distances), 2)
+    total_pos = sum(i > 0 for i in distances)
+    total_neg = len(distances) - total_pos
 
     genScatterPdf(scatter_file_path, 
                   args.tissue,
@@ -206,15 +253,18 @@ if __name__ == '__main__':
                   skew,
                   kurt
     )
-    
+
+    with open(os.path.join(args.outdir, 'statistics'), 'w') as o:
+        o.write('min:\t{}\n'.format(_min))
+        o.write('max:\t{}\n'.format(_max))
+        o.write('median:\t{}\n'.format(median))
+        o.write('mode:\t{}\n'.format(mode))
+        o.write('stdev:\t{}\n'.format(stdev))
+        o.write('skew:\t{}\n'.format(skew))
+        o.write('total_pos:\t{}\n'.format(total_pos))
+        o.write('total_neg:\t{}\n'.format(total_neg))
+        o.write('total_zero:\t{}\n'.format(total_zero))
+        o.write('total_symmetric:\t{}\n'.format(total_symmetric))
+
     with open(os.path.join(args.outdir, 'distances'), 'w') as d:
         d.write(('\n').join([str(x) for x in distances]))
-    
-    with open(os.path.join(args.outdir, 'counts'), 'w') as c:
-        c.write('skew\t{}\n'.format(skew))
-        c.write('kurtosis\t{}\n'.format(kurt))
-        for key in all_counts:
-            c.write('{}\t{}\n'.format(key, all_counts[key]))
-    
-    #pp.savefig()
-    #pp.close()
