@@ -135,12 +135,26 @@ def filterUtr3s(utr3s, t2g):
             genes[gene].append(utr3)
     keep = {}
     for gene in genes:
+        genes[gene] = sorted(genes[gene], key = lambda x: (x.start, x.end))
         if genes[gene][0].strand == '+':
             if len(set([x.start for x in genes[gene]])) == 1:
                 keep[gene] = genes[gene]
         else:
             if len(set([x.end for x in genes[gene]])) == 1:
                 keep[gene] = genes[gene]
+        store = True
+        for i in xrange(1, len(genes[gene])):
+            current = genes[gene][i]
+            previous = genes[gene][i-1]
+            if (current.start == previous.start):
+                continue
+            if (current.start < previous.end):
+                store = False
+                break
+            #elif current.start == previous.end:
+            #    print gene
+        if store:
+            keep[gene] = genes[gene]
     return keep
 
 #import matplotlib.pyplot as plt
@@ -185,7 +199,11 @@ if __name__ == '__main__':
     else:
         sys.exit('Must specify -t2g')
 
+    #print 'Num 3\'UTRs: {}'.format(len([x for x in utr3s]))
+    #utr3s = pysam.tabix_iterator(open(args.utr3s), parser=pysam.asBed())
     utr3s = filterUtr3s(utr3s, t2g)
+    #print 'Num 3\'UTRs: {}'.format(sum([len(utr3s[gene]) for gene in utr3s]))
+    #sys.exit()
     
     distances = []
     scatter_file_path = os.path.join(args.outdir, 'coordinates')
@@ -233,6 +251,7 @@ if __name__ == '__main__':
     _max = round(max(distances), 2)
     _min = round(min(distances), 2)
     median = round(np.percentile(distances, 50), 2)
+    mean = round(sum(distances)/len(distances))
     mode = round(
         max(set(distances), key = distances.count), 2
     )
@@ -257,6 +276,7 @@ if __name__ == '__main__':
     with open(os.path.join(args.outdir, 'statistics'), 'w') as o:
         o.write('min:\t{}\n'.format(_min))
         o.write('max:\t{}\n'.format(_max))
+        o.write('mean:\t{}\n'.format(mean))
         o.write('median:\t{}\n'.format(median))
         o.write('mode:\t{}\n'.format(mode))
         o.write('stdev:\t{}\n'.format(stdev))
